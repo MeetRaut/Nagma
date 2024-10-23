@@ -1,0 +1,39 @@
+/* src/components/Chatbot.css */
+
+/* Loader Spinner */
+.loader {
+    border: 4px solid rgba(0, 0, 0, 0.1);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border-left-color: #4f46e5; /* Purple color */
+    animation: spin 1s linear infinite;
+  }
+  
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  
+  /* Optional: Scrollbar Styling for Better Aesthetics */
+  .fixed .overflow-y-auto::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .fixed .overflow-y-auto::-webkit-scrollbar-track {
+    background: #f1f1f1;
+  }
+  
+  .fixed .overflow-y-auto::-webkit-scrollbar-thumb {
+    background-color: #c1c1c1;
+    border-radius: 3px;
+  }
+  
+/* Responsive Adjustments */
+@media (max-width: 640px) {
+    .fixed {
+      width: 90vw;
+      right: 5vw;
+    }
+}  
