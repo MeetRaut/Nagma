@@ -27,36 +27,77 @@ class NagmaChatbot:
         logger.info("NagmaChatbot initialized.")
 
     def load_dataset(self, path):
-        """Loads the dataset from a CSV file and filters songs released after the year 2000."""
         try:
-            df = pd.read_csv(path)
-            
-            # Ensure 'release_date' is in datetime format
-            if 'release_date' in df.columns:
-                df['release_date'] = pd.to_datetime(df['release_date'], errors='coerce')
-                # Extract the release year
-                df['release_year'] = df['release_date'].dt.year
+            self.df = pd.read_csv(path)
+            logger.info(f"Dataset loaded successfully with shape: {self.df.shape}")
+            logger.info(f"Columns in dataset before standardizing: {self.df.columns.tolist()}")
+
+            # Remove special characters and standardize column names
+            self.df.columns = self.df.columns.str.replace(r'[^\w]', '', regex=True).str.lower()
+            logger.info(f"Dataset columns after removing special characters: {self.df.columns.tolist()}")
+
+            # Mapping from your dataset's column names to expected column names
+            column_mapping = {
+                'valence': 'valence',
+                'acousticness': 'acousticness',
+                'artists': 'artists',
+                'danceability': 'danceability',
+                'energy': 'energy',
+                'tempo': 'tempo',
+                'name': 'name',
+                'popularity': 'popularity',
+                'releasedate': 'release_date',  # Note that special characters are removed
+                'year': 'year',
+                # Add other mappings as needed
+            }
+            self.df.rename(columns=column_mapping, inplace=True)
+            logger.info(f"Dataset columns after renaming: {self.df.columns.tolist()}")
+
+            expected_columns = {'valence', 'acousticness', 'danceability', 'energy', 'tempo'}
+            missing_columns = expected_columns - set(self.df.columns)
+            if missing_columns:
+                logger.error(f"Missing columns in dataset after loading: {missing_columns}")
+                logger.error(f"Available columns: {self.df.columns.tolist()}")
+                return pd.DataFrame()  # Return an empty DataFrame if essential columns are missing
+
+            # Ensure 'release_year' is in the dataset
+            if 'release_date' in self.df.columns:
+                self.df['release_date'] = pd.to_datetime(self.df['release_date'], errors='coerce')
+                self.df = self.df.dropna(subset=['release_date'])
+                self.df['release_year'] = self.df['release_date'].dt.year.astype(int)
+            elif 'year' in self.df.columns:
+                self.df['release_year'] = pd.to_numeric(self.df['year'], errors='coerce').astype('Int64')
+                self.df = self.df.dropna(subset=['release_year'])
             else:
-                # If 'release_date' is not available, check for 'year' column
-                if 'year' in df.columns:
-                    df['release_year'] = df['year']
-                else:
-                    print("Error: No 'release_date' or 'year' column found in the dataset.")
-                    return pd.DataFrame()
-            
-            # Filter the dataset for songs released in or after the year 2000
-            df = df[df['release_year'] >= 1980]
-            logger.info(f"Dataset filtered to include songs released in or after 1980.")
-            
-            # Optional: Drop the 'release_year' column if not needed
-            # df = df.drop(columns=['release_year'])
-            
-            return df.reset_index(drop=True)
+                logger.error("No 'release_date' or 'year' column found in the dataset.")
+                return pd.DataFrame()
+
+            logger.info(f"Number of records before filtering by year: {self.df.shape[0]}")
+            self.df = self.df[self.df['release_year'] >= 1980]
+            logger.info(f"Number of records after filtering by year: {self.df.shape[0]}")
+
+            if self.df.empty:
+                logger.error("The dataset is empty after filtering by release year.")
+                return pd.DataFrame()
+
+            # Convert essential columns to numeric
+            for col in expected_columns:
+                self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+
+            # Drop rows with NaN values in essential columns
+            self.df.dropna(subset=expected_columns, inplace=True)
+
+            logger.info(f"DataFrame shape after cleaning: {self.df.shape}")
+            return self.df.reset_index(drop=True)
+
         except FileNotFoundError:
-            print(f"Error: The file at {path} was not found.")
+            logger.error(f"Error: The file at {path} was not found.")
             return pd.DataFrame()
-        except pd.errors.ParserError:
-            print("Error: The file could not be parsed as a CSV.")
+        except pd.errors.ParserError as e:
+            logger.error(f"Error parsing CSV: {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during dataset loading: {e}", exc_info=True)
             return pd.DataFrame()
 
     def get_artist_stats(self, artist_name):
@@ -69,8 +110,14 @@ class NagmaChatbot:
         Returns:
             dict or str: Dictionary containing artist stats or an error message.
         """
+        # Clean and standardize artist_name
+        artist_name = artist_name.strip().lower()
+
+        # Ensure 'artists' column is properly cleaned
         artist_songs = self.df[self.df['artists'].str.contains(artist_name, case=False, na=False)]
+
         if artist_songs.empty:
+            logger.warning(f"No songs found for artist: {artist_name}")
             return f"I couldn't find any songs by {artist_name} in my database."
 
         stats = {
@@ -123,7 +170,7 @@ class NagmaChatbot:
             response += f"  Range: {stats['min']:.2f} - {stats['max']:.2f}\n"
 
         return response
-    
+
     def recommend_songs(self):
         # For demonstration purposes, let's recommend the top 5 popular songs
         if 'popularity' in self.df.columns:
@@ -134,15 +181,19 @@ class NagmaChatbot:
             return response
         else:
             return "Sorry, I don't have popularity data to make recommendations."
-        
+
     def collect_preferences(self, user_input):
         current_param = self.preference_params[self.preference_index]
         try:
             if current_param == 'year':
                 self.preferences[current_param] = int(user_input.strip())
             elif current_param == 'tempo':
-                # Handle tempo as a numeric value
-                self.preferences[current_param] = float(user_input.strip())
+                # Handle tempo as a BPM value (expecting realistic BPM values like 60-180)
+                tempo_value = float(user_input.strip())
+                if 40 <= tempo_value <= 250:  # Acceptable BPM range, can be adjusted
+                    self.preferences[current_param] = tempo_value
+                else:
+                    return "Please enter a realistic tempo value (e.g., 60-180 BPM)."
             else:
                 value = float(user_input.strip())
                 if 0 <= value <= 1:
@@ -157,11 +208,14 @@ class NagmaChatbot:
         if self.preference_index < len(self.preference_params):
             next_param = self.preference_params[self.preference_index]
             param_explanation = self.get_parameter_explanation(next_param)
-            return f"{param_explanation}\nWhat **{next_param}** value do you prefer? (Enter a number between 0 and 1)"
+            if next_param == 'tempo':
+                return f"{param_explanation}\nWhat **{next_param}** value do you prefer? (Enter a number, e.g., 60-180 BPM)"
+            else:
+                return f"{param_explanation}\nWhat **{next_param}** value do you prefer? (Enter a number between 0 and 1)"
         else:
             self.state = None
             return self.recommend_songs_based_on_preferences()
-    
+
     def get_parameter_explanation(self, param):
         explanations = {
             'valence': (
@@ -184,31 +238,63 @@ class NagmaChatbot:
         }
         return explanations.get(param, "")
 
-    
     def recommend_songs_based_on_preferences(self):
         df_filtered = self.df.copy()
-        for param, value in self.preferences.items():
-            if param == 'tempo':
-                # Use a tolerance for tempo
-                tolerance = 10  # Adjust as needed
-                min_value = max(0, value - tolerance)
-                max_value = value + tolerance
-                df_filtered = df_filtered[(df_filtered['tempo'] >= min_value) & (df_filtered['tempo'] <= max_value)]
+        expected_columns = ['valence', 'acousticness', 'danceability', 'energy', 'tempo']
+
+        # Check if expected columns are present
+        missing_columns = [col for col in expected_columns if col not in df_filtered.columns]
+        if missing_columns:
+            logger.error(f"Missing columns in dataset: {missing_columns}")
+            return "Sorry, the dataset does not have the necessary information to recommend songs based on your preferences."
+
+        try:
+            logger.info(f"Using preferences for song recommendation: {self.preferences}")
+
+            for param, value in self.preferences.items():
+                if value is None:
+                    logger.warning(f"Preference '{param}' is not set. Skipping filtering for this parameter.")
+                    continue
+
+                if param == 'tempo':
+                    # Use a tolerance for tempo based on BPM
+                    tolerance = 10  # Adjust as needed
+                    min_value = max(0, value - tolerance)
+                    max_value = value + tolerance
+                    if 'tempo' in df_filtered.columns:
+                        df_filtered = df_filtered[(df_filtered['tempo'] >= min_value) & (df_filtered['tempo'] <= max_value)]
+                    else:
+                        logger.warning(f"'tempo' not found in dataset columns. Skipping filtering by tempo.")
+                else:
+                    # Use a tolerance for other parameters
+                    tolerance = 0.1
+                    min_value = max(0, value - tolerance)
+                    max_value = min(1, value + tolerance)
+
+                    # Check if the parameter exists in the DataFrame
+                    if param not in df_filtered.columns:
+                        logger.warning(f"Parameter '{param}' not found in dataset columns. Skipping...")
+                        continue
+
+                    df_filtered = df_filtered[(df_filtered[param] >= min_value) & (df_filtered[param] <= max_value)]
+
+            if df_filtered.empty:
+                return "Sorry, I couldn't find any songs matching your preferences."
             else:
-                # Use a tolerance for other parameters
-                tolerance = 0.1
-                min_value = max(0, value - tolerance)
-                max_value = min(1, value + tolerance)
-                df_filtered = df_filtered[(df_filtered[param] >= min_value) & (df_filtered[param] <= max_value)]
-        if df_filtered.empty:
-            return "Sorry, I couldn't find any songs matching your preferences."
-        else:
-            top_songs = df_filtered.sort_values(by='popularity', ascending=False).head(5)
-            response = "Here are some songs that match your preferences:\n"
-            for _, song in top_songs.iterrows():
-                response += f"- \"{song['name']}\" by {song['artists']}\n"
-            return response
-    
+                # Sort by popularity if available
+                if 'popularity' in df_filtered.columns:
+                    top_songs = df_filtered.sort_values(by='popularity', ascending=False).head(5)
+                else:
+                    top_songs = df_filtered.head(5)
+                response = "Here are some songs that match your preferences:\n"
+                for _, song in top_songs.iterrows():
+                    response += f"- \"{song['name']}\" by {song['artists']}\n"
+                return response
+
+        except Exception as e:
+            logger.error(f"Error during song recommendation: {e}", exc_info=True)
+            return "Sorry, an error occurred while trying to recommend songs."
+
     def get_song_information(self, song_name, artist_name=None):
         """
         Retrieves information about a specific song, optionally by a specific artist.
@@ -239,7 +325,10 @@ class NagmaChatbot:
                 return f"Sorry, I couldn't find any information about the song '{song_name}'."
 
         # If multiple matches, select the most popular one
-        song = song_matches.sort_values(by='popularity', ascending=False).iloc[0]
+        if 'popularity' in song_matches.columns:
+            song = song_matches.sort_values(by='popularity', ascending=False).iloc[0]
+        else:
+            song = song_matches.iloc[0]
 
         # Format the song information
         response = f"Here's some information about '{song['name']}' by {song['artists']}:\n"
@@ -257,7 +346,7 @@ class NagmaChatbot:
             if feature in song and pd.notnull(song[feature]):
                 response += f"- {feature.capitalize()}: {song[feature]}\n"
         return response
-    
+
     def get_trending_songs(self, num_songs=5):
         """
         Retrieves a list of trending songs based on popularity and recent release date.
@@ -275,6 +364,7 @@ class NagmaChatbot:
         # Ensure 'release_date' is in datetime format
         if not pd.api.types.is_datetime64_any_dtype(self.df['release_date']):
             self.df['release_date'] = pd.to_datetime(self.df['release_date'], errors='coerce')
+            self.df = self.df.dropna(subset=['release_date'])
 
         # Filter songs released in the last month
         one_month_ago = datetime.now() - pd.DateOffset(months=1)
@@ -306,10 +396,10 @@ class NagmaChatbot:
         Processes user input and returns an appropriate response.
         """
         user_input_lower = user_input.lower()
-        
+
         for intent_name, phrases in intents.items():
             for phrase in phrases:
-                if phrase in user_input.lower():
+                if phrase in user_input_lower:
                     if intent_name == 'song_information':
                         # Extract the song name and artist name
                         # Remove the phrase from the input
@@ -326,7 +416,7 @@ class NagmaChatbot:
                         # Call the updated get_song_information method
                         song_info = self.get_song_information(song_name, artist_name)
                         return song_info
-                    
+
                     elif intent_name == 'trending_songs':
                         # Handle trending songs request
                         trending_songs, recent = self.get_trending_songs()
@@ -340,7 +430,7 @@ class NagmaChatbot:
                         for song in trending_songs:
                             response += f"- \"{song['name']}\" by {song['artists']} (Popularity: {song['popularity']})\n"
                         return response
-                    
+
                     elif intent_name == 'artist_information':
                         # Handle artist information
                         artist_name = user_input_lower.replace(phrase, '').strip()
@@ -349,31 +439,28 @@ class NagmaChatbot:
                         artist_info = self.get_artist_stats(artist_name)
                         response = self.format_artist_info(artist_info, artist_name)
                         return response
-                            
-                    elif intent_name == 'trending_songs':
-                        # Handle trending songs request
-                        trending_songs = self.get_trending_songs()
-                        if isinstance(trending_songs, str):
-                            return trending_songs
-                        response = "Here are the current trending songs:\n"
-                        for song in trending_songs:
-                            response += f"- {song['name']} by {song['artists']}"
-                            if 'popularity' in song:
-                                response += f" (Popularity: {song['popularity']})"
-                            response += "\n"
-                        return response
-                    if intent_name == 'recommend_songs':
+
+                    elif intent_name == 'recommend_songs':
                         # Start collecting preferences
                         self.preferences = {}
                         self.state = 'collecting_preferences'
                         self.preference_params = ['valence', 'acousticness', 'danceability', 'energy', 'tempo']
                         self.preference_index = 0
-                        return (
-                            "Sure! Let's find songs based on your preferences.\n"
-                            "On a scale from 0 to 1, what **valence** (musical positiveness) do you prefer?"
-                        )
+                        # Get the explanation for the first parameter
+                        first_param = self.preference_params[0]
+                        param_explanation = self.get_parameter_explanation(first_param)
+                        if first_param == 'tempo':
+                            return (
+                                "Sure! Let's find songs based on your preferences.\n"
+                                f"{param_explanation}\nWhat **{first_param}** value do you prefer? (Enter a number, e.g., 60-180 BPM)"
+                            )
+                        else:
+                            return (
+                                "Sure! Let's find songs based on your preferences.\n"
+                                f"{param_explanation}\nWhat **{first_param}** value do you prefer? (Enter a number between 0 and 1)"
+                            )
                     # Add more intent handling here as needed
-                    
+
         # Check if we're collecting preferences
         if self.state == 'collecting_preferences':
             return self.collect_preferences(user_input)
@@ -386,7 +473,7 @@ class NagmaChatbot:
             return responses[matched_intent]
 
         return "I'm not sure what you're asking. Could you rephrase your question?"
-    
+
     def run(self):
         """
         Starts the chatbot interaction loop.
@@ -399,7 +486,7 @@ class NagmaChatbot:
         print("- Finding information about Songs")
         print("- Release date information")
         print("And more! Type 'exit' to end the chat.")
-        
+
         while True:
             user_input = input("You: ")
             if user_input.lower() == 'exit':

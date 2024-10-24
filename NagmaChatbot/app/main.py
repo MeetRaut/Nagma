@@ -59,7 +59,7 @@ async def get_chat_response(chat_request: ChatRequest):
         logger.info(f"Responding to user {user_id}: {response}")
         return ChatResponse(response=response)
     except Exception as e:
-        logger.error(f"Error processing message from user {user_id}: {e}")
+        logger.error(f"Error processing message from user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error.")
 
 @app.get("/", tags=["Root"])
